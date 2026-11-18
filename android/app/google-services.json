@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "228029120676",
+    "project_id": "card-quest-c7560",
+    "storage_bucket": "card-quest-c7560.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:228029120676:android:8f967fb0e37c70834d2631",
+        "android_client_info": {
+          "package_name": "com.example.card_quest"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJVtFk_BJZPwRleUomKhyXxiDu6L9HTpo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
