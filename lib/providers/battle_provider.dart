@@ -1,265 +1,271 @@
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:card_quest/models/card_model.dart';
+import 'package:card_quest/models/level_config.dart';
 
-/// Posibles estados finales o actuales de la partida
+/// Posibles estados del combate
 enum BattleStatus {
   inProgress, // Combate activo en curso
   victory,    // El enemigo fue derrotado (enemyHp <= 0)
   defeat,     // El jugador fue derrotado (playerHp <= 0)
 }
 
-/// Gestor de estado del combate utilizando ChangeNotifier (patrón Provider).
-/// Se encarga de la lógica de turnos, puntos de vida, energía, mazo, mano y descarte.
+/// Gestor de estado del combate ajustado estrictamente a las reglas de la Sección 6
+/// del documento de requerimientos oficiales de Card Quest.
 class BattleProvider with ChangeNotifier {
   // ============================================================
-  // 1. ESTADO DE VIDA (Jugador y Enemigo)
+  // 1. REGLAS DE VIDA (Jugador: 30 HP máx, Enemigo según nivel)
   // ============================================================
 
-  /// Vida máxima base con la que inicia el jugador
-  final int maxPlayerHp = 100;
+  /// Jugador: 30 de vida máxima fija (Sección 6)
+  static const int maxPlayerHp = 30;
+  int _playerHp = maxPlayerHp;
 
-  /// Vida máxima base con la que inicia el enemigo
-  final int maxEnemyHp = 80;
+  /// Nivel actual y configuración del enemigo
+  LevelConfig _currentLevel = LevelConfig.officialLevels[0];
+  int _enemyHp = 18;
 
-  /// Puntos de vida actuales del jugador (privado para proteger la mutación directa)
-  int _playerHp = 100;
-
-  /// Puntos de vida actuales del enemigo
-  int _enemyHp = 80;
-
-  /// Puntos de escudo que absorben daño antes de reducir la vida del jugador
+  /// Escudo del jugador (persiste durante el turno enemigo y se reinicia al inicio de su turno)
   int _playerShield = 0;
 
-  /// Getters públicos de sólo lectura para que la UI los consuma
+  /// Getters de lectura
   int get playerHp => _playerHp;
   int get enemyHp => _enemyHp;
+  int get enemyMaxHp => _currentLevel.enemyMaxHealth;
   int get playerShield => _playerShield;
+  LevelConfig get currentLevel => _currentLevel;
 
   // ============================================================
-  // 2. ESTADO DE ENERGÍA DISPONIBLE
+  // 2. ENERGÍA Y TURNOS
   // ============================================================
 
-  /// Límite máximo de energía por turno
-  final int maxEnergy = 3;
-
-  /// Energía restante en el turno actual para gastar en cartas
-  int _currentEnergy = 3;
-
-  /// Getter público de la energía disponible
+  /// Jugador: 3 de energía por turno (Sección 6)
+  static const int maxEnergy = 3;
+  int _currentEnergy = maxEnergy;
   int get currentEnergy => _currentEnergy;
 
+  /// Contador de turnos completados (usado en la fórmula de puntaje)
+  int _turnsCompleted = 0;
+  int get turnsCompleted => _turnsCompleted;
+
+  /// Turno actual: true = Jugador, false = Enemigo
+  bool _isPlayerTurn = true;
+  bool get isPlayerTurn => _isPlayerTurn;
+
+  /// Bandera para evitar dobles ejecuciones mientras se procesa una acción (RF-08)
+  bool _isActionResolving = false;
+  bool get isActionResolving => _isActionResolving;
+
+  /// El enemigo cura 4 puntos una sola vez por combate si su vida es <= 30% (Sección 6)
+  bool _enemyHasHealedOnce = false;
+
+  /// Intención del enemigo para mostrar en la interfaz (RF-07)
+  String _enemyIntent = 'Atacar';
+  String get enemyIntent => _enemyIntent;
+
   // ============================================================
-  // 3. MAZO, MANO Y DESCARTE
+  // 3. MAZO, MANO Y DESCARTE (Mano máxima 5, Mazo inicial de 10 cartas)
   // ============================================================
 
-  /// Pila de robo (cartas por salir)
+  static const int maxHandSize = 5;
+
   final List<CardModel> _deck = [];
-
-  /// Cartas actualmente disponibles en la mano del jugador
   final List<CardModel> _hand = [];
-
-  /// Pila de descarte (cartas ya jugadas o descartadas al terminar turno)
   final List<CardModel> _discardPile = [];
 
-  /// Listas inmutables expuestas para evitar modificaciones accidentales desde la UI
   List<CardModel> get hand => List.unmodifiable(_hand);
   List<CardModel> get deck => List.unmodifiable(_deck);
   List<CardModel> get discardPile => List.unmodifiable(_discardPile);
 
   // ============================================================
-  // 4. ESTADO DE LA BATALLA (Victoria / Derrota)
+  // 4. ESTADO DE LA BATALLA Y RESULTADOS
   // ============================================================
 
-  /// Estado actual del combate (en curso, victoria o derrota)
   BattleStatus _status = BattleStatus.inProgress;
   BattleStatus get status => _status;
-
-  /// Bandera para saber si la partida terminó y bloquear nuevas acciones
   bool get isGameOver => _status != BattleStatus.inProgress;
 
-  /// Indica de quién es el turno: true = Jugador, false = Enemigo
-  bool _isPlayerTurn = true;
-  bool get isPlayerTurn => _isPlayerTurn;
+  /// Puntuación final calculada al ganar: max(0, 100 * nivel + 5 * vidaRestante - 2 * turnos)
+  int _calculatedScore = 0;
+  int get calculatedScore => _calculatedScore;
 
   // ============================================================
-  // INICIALIZACIÓN Y REINICIO DE BATALLA
+  // INICIALIZACIÓN DE LA BATALLA
   // ============================================================
 
-  /// El constructor inicializa automáticamente una nueva partida
-  BattleProvider() {
-    startNewBattle();
+  BattleProvider({int levelNumber = 1}) {
+    startBattle(levelNumber: levelNumber);
   }
 
-  /// Reinicia todos los contadores y configura el mazo para un nuevo combate
-  void startNewBattle() {
+  /// Inicia el combate configurando el nivel solicitado (1 a 5)
+  void startBattle({int levelNumber = 1}) {
+    final levelIndex = (levelNumber - 1).clamp(0, LevelConfig.officialLevels.length - 1);
+    _currentLevel = LevelConfig.officialLevels[levelIndex];
+
     _playerHp = maxPlayerHp;
-    _enemyHp = maxEnemyHp;
+    _enemyHp = _currentLevel.enemyMaxHealth;
     _playerShield = 0;
     _currentEnergy = maxEnergy;
-    _status = BattleStatus.inProgress;
+    _turnsCompleted = 0;
     _isPlayerTurn = true;
+    _isActionResolving = false;
+    _enemyHasHealedOnce = false;
+    _status = BattleStatus.inProgress;
+    _calculatedScore = 0;
+    _updateEnemyIntent();
 
-    // Limpiar pilas anteriores
+    // RF-06: Mazo inicial de diez instancias con repeticiones permitidas:
+    // cuatro Golpes, tres Escudos, dos Pociones y un Fuego.
     _deck.clear();
     _hand.clear();
     _discardPile.clear();
 
-    // Crear el mazo de cartas temático
     _deck.addAll([
-      const CardModel(
-        id: '1',
-        name: 'Corte Samurai',
-        energyCost: 1,
-        value: 15,
-        type: CardType.attack,
-        description: 'Inflige 15 de daño al enemigo',
-      ),
-      const CardModel(
-        id: '2',
-        name: 'Golpe de Katana',
-        energyCost: 1,
-        value: 12,
-        type: CardType.attack,
-        description: 'Inflige 12 de daño al enemigo',
-      ),
-      const CardModel(
-        id: '3',
-        name: 'Postura Defensiva',
-        energyCost: 1,
-        value: 10,
-        type: CardType.defense,
-        description: 'Otorga 10 de escudo',
-      ),
-      const CardModel(
-        id: '4',
-        name: 'Estocada Veloz',
-        energyCost: 2,
-        value: 25,
-        type: CardType.attack,
-        description: 'Inflige 25 de daño crítico',
-      ),
-      const CardModel(
-        id: '5',
-        name: 'Guardia Imperial',
-        energyCost: 2,
-        value: 20,
-        type: CardType.defense,
-        description: 'Otorga 20 de escudo resistente',
-      ),
+      // 4 Golpes (Costo 1, Daño 4)
+      const CardModel(id: 'golpe_1', name: 'Golpe', energyCost: 1, value: 4, type: CardType.attack, description: 'Inflige 4 de daño'),
+      const CardModel(id: 'golpe_2', name: 'Golpe', energyCost: 1, value: 4, type: CardType.attack, description: 'Inflige 4 de daño'),
+      const CardModel(id: 'golpe_3', name: 'Golpe', energyCost: 1, value: 4, type: CardType.attack, description: 'Inflige 4 de daño'),
+      const CardModel(id: 'golpe_4', name: 'Golpe', energyCost: 1, value: 4, type: CardType.attack, description: 'Inflige 4 de daño'),
+
+      // 3 Escudos (Costo 1, Añade 5 de escudo)
+      const CardModel(id: 'escudo_1', name: 'Escudo', energyCost: 1, value: 5, type: CardType.defense, description: 'Añade 5 de escudo'),
+      const CardModel(id: 'escudo_2', name: 'Escudo', energyCost: 1, value: 5, type: CardType.defense, description: 'Añade 5 de escudo'),
+      const CardModel(id: 'escudo_3', name: 'Escudo', energyCost: 1, value: 5, type: CardType.defense, description: 'Añade 5 de escudo'),
+
+      // 2 Pociones (Costo 2, Cura 6)
+      const CardModel(id: 'pocion_1', name: 'Poción', energyCost: 2, value: 6, type: CardType.heal, description: 'Cura 6 puntos de vida'),
+      const CardModel(id: 'pocion_2', name: 'Poción', energyCost: 2, value: 6, type: CardType.heal, description: 'Cura 6 puntos de vida'),
+
+      // 1 Fuego (Costo 2, Daño 7)
+      const CardModel(id: 'fuego_1', name: 'Fuego', energyCost: 2, value: 7, type: CardType.attack, description: 'Inflige 7 de daño de fuego'),
     ]);
 
-    // Barajar y robar 4 cartas iniciales
+    // Comienza el combate con el mazo barajado, mano vacía y descarte vacío
     _shuffleDeck();
-    _drawCards(4);
-
-    // 5. Notificar a los widgets suscritos para redibujar la pantalla
+    _drawCardsUntilFull(); // Al iniciar el turno roba hasta tener 5 cartas
     notifyListeners();
   }
 
   // ============================================================
-  // ACCIÓN: JUGAR CARTA
+  // ACCIÓN DEL JUGADOR: JUGAR CARTA (RF-08)
   // ============================================================
 
-  /// Ejecuta el efecto de una carta desde la mano del jugador
   bool playCard(CardModel card) {
-    // Validar si el juego ya terminó o si no es el turno del jugador
-    if (isGameOver || !_isPlayerTurn) return false;
-
-    // Validar si el jugador cuenta con la energía requerida
+    if (isGameOver || !_isPlayerTurn || _isActionResolving) return false;
+    if (!_hand.contains(card)) return false;
     if (_currentEnergy < card.energyCost) return false;
 
-    // 1) Deducir la energía gastada
+    _isActionResolving = true;
+
+    // Descontar costo de energía
     _currentEnergy -= card.energyCost;
 
-    // 2) Aplicar el efecto de acuerdo al tipo de carta
-    if (card.type == CardType.attack) {
-      // Inflige daño asegurando que la vida no baje de cero
-      _enemyHp = max(0, _enemyHp - card.value);
-    } else if (card.type == CardType.defense) {
-      // Suma escudo defensivo temporal
-      _playerShield += card.value;
+    // Aplicar efecto de la carta
+    switch (card.type) {
+      case CardType.attack:
+        _enemyHp = max(0, _enemyHp - card.value);
+        break;
+      case CardType.defense:
+        _playerShield += card.value;
+        break;
+      case CardType.heal:
+        // La vida nunca supera el máximo de 30 (Sección 6)
+        _playerHp = min(maxPlayerHp, _playerHp + card.value);
+        break;
+      case CardType.special:
+        break;
     }
 
-    // 3) Mover la carta de la mano a la pila de descarte
+    // Pasa de la mano al descarte
     _hand.remove(card);
     _discardPile.add(card);
 
-    // 4) Verificar si el ataque provocó la derrota del enemigo
+    _updateEnemyIntent();
     _checkBattleEnd();
 
-    // 5) Actualizar la interfaz gráfica reactivamente
+    _isActionResolving = false;
     notifyListeners();
     return true;
   }
 
   // ============================================================
-  // GESTIÓN DE TURNOS (JUGADOR Y ENEMIGO)
+  // TURNO DEL ENEMIGO (RF-09 / Sección 6)
   // ============================================================
 
-  /// Finaliza el turno del jugador y procesa la respuesta del enemigo
   Future<void> endPlayerTurn() async {
-    if (isGameOver || !_isPlayerTurn) return;
+    if (isGameOver || !_isPlayerTurn || _isActionResolving) return;
 
-    // Cambiar control al turno del enemigo
+    _isActionResolving = true;
     _isPlayerTurn = false;
+    _turnsCompleted++;
 
-    // Al finalizar el turno, las cartas no usadas en mano van al descarte
+    // Al finalizar el turno, las cartas restantes en mano pasan al descarte
     _discardPile.addAll(_hand);
     _hand.clear();
-
-    // Notificar cambio de turno inmediatamente a la UI
     notifyListeners();
 
-    // Pausa simulada para darle dramatismo a la acción del rival (1.5s)
-    await Future.delayed(const Duration(milliseconds: 1500));
+    // Pausa visual para la animación/acción del rival (1.2 segundos)
+    await Future.delayed(const Duration(milliseconds: 1200));
 
-    // Cálculo aleatorio de ataque enemigo (entre 10 y 20 de daño)
-    final randomDamage = Random().nextInt(10) + 10;
-    int remainingDamage = randomDamage;
+    // Regla de IA del enemigo (Sección 6):
+    // "Si su vida es 30% o menos, cura 4 puntos una sola vez por combate; en otro caso ataca con su daño configurado"
+    final enemyHpThreshold = (_currentLevel.enemyMaxHealth * 0.30).ceil();
 
-    // El escudo del jugador absorbe el daño en primer lugar
-    if (_playerShield > 0) {
-      final shieldDamage = min(_playerShield, remainingDamage);
-      _playerShield -= shieldDamage;
-      remainingDamage -= shieldDamage;
+    if (_enemyHp <= enemyHpThreshold && !_enemyHasHealedOnce) {
+      // Curación del enemigo (una sola vez)
+      _enemyHp = min(_currentLevel.enemyMaxHealth, _enemyHp + 4);
+      _enemyHasHealedOnce = true;
+    } else {
+      // Ataque del enemigo
+      int remainingDamage = _currentLevel.enemyDamage;
+
+      // El escudo absorbe daño antes que la vida
+      if (_playerShield > 0) {
+        final absorbed = min(_playerShield, remainingDamage);
+        _playerShield -= absorbed;
+        remainingDamage -= absorbed;
+      }
+
+      // El remanente reduce la vida (nunca baja de cero)
+      if (remainingDamage > 0) {
+        _playerHp = max(0, _playerHp - remainingDamage);
+      }
     }
 
-    // El remanente de daño que el escudo no absorbió impacta en la salud
-    if (remainingDamage > 0) {
-      _playerHp = max(0, _playerHp - remainingDamage);
-    }
-
-    // Comprobar si el golpe derrotó al jugador
     _checkBattleEnd();
 
-    // Si la partida no ha acabado, iniciar el siguiente turno del jugador
     if (!isGameOver) {
       _startPlayerTurn();
     } else {
+      _isActionResolving = false;
       notifyListeners();
     }
   }
 
-  /// Restaura los recursos al comenzar un nuevo turno del jugador
+  /// Al iniciar cada turno del jugador (Sección 6):
+  /// - Su escudo vuelve a cero
+  /// - Su energía vuelve a 3
+  /// - Roba hasta tener 5 cartas (máximo de 5)
   void _startPlayerTurn() {
     _isPlayerTurn = true;
-    _currentEnergy = maxEnergy; // Se restaura la barra de energía
-    _playerShield = 0;         // El escudo temporal se reinicia cada turno
-    _drawCards(4);             // Roba 4 nuevas cartas
+    _playerShield = 0;
+    _currentEnergy = maxEnergy;
+    _drawCardsUntilFull();
+    _updateEnemyIntent();
+    _isActionResolving = false;
     notifyListeners();
   }
 
   // ============================================================
-  // ROBO Y REVOLVEDORA DE CARTAS
+  // ROBO Y BARAJAJE (Sección 6)
   // ============================================================
 
-  /// Roba un número determinado de cartas del mazo a la mano
-  void _drawCards(int count) {
-    for (int i = 0; i < count; i++) {
-      // Si la pila de robo se agota, el descarte se recicla al mazo
+  /// Roba hasta tener cinco cartas en mano
+  void _drawCardsUntilFull() {
+    while (_hand.length < maxHandSize) {
       if (_deck.isEmpty) {
-        if (_discardPile.isEmpty) break; // Ya no hay más cartas en ningún lado
+        if (_discardPile.isEmpty) break; // Si no hay cartas en ningún lado, roba lo posible
+        // Si se agota el mazo al robar, se baraja el descarte para formar uno nuevo
         _deck.addAll(_discardPile);
         _discardPile.clear();
         _shuffleDeck();
@@ -270,21 +276,34 @@ class BattleProvider with ChangeNotifier {
     }
   }
 
-  /// Baraja las cartas de la pila de robo usando orden aleatorio
   void _shuffleDeck() {
     _deck.shuffle(Random());
   }
 
+  void _updateEnemyIntent() {
+    final enemyHpThreshold = (_currentLevel.enemyMaxHealth * 0.30).ceil();
+    if (_enemyHp <= enemyHpThreshold && !_enemyHasHealedOnce) {
+      _enemyIntent = 'Curar (+4 HP)';
+    } else {
+      _enemyIntent = 'Atacar (${_currentLevel.enemyDamage} Daño)';
+    }
+  }
+
   // ============================================================
-  // CONDICIONES DE VICTORIA O DERROTA
+  // EVALUACIÓN DE VICTORIA / DERROTA Y FÓRMULA DE PUNTAJE (Sección 6)
   // ============================================================
 
-  /// Evalúa los puntos de vida para declarar un ganador
   void _checkBattleEnd() {
     if (_enemyHp <= 0) {
       _status = BattleStatus.victory;
+      // Fórmula oficial: max(0, 100 * nivel + 5 * vidaRestante - 2 * turnos)
+      final scoreFormula = (100 * _currentLevel.levelNumber) +
+          (5 * _playerHp) -
+          (2 * _turnsCompleted);
+      _calculatedScore = max(0, scoreFormula);
     } else if (_playerHp <= 0) {
       _status = BattleStatus.defeat;
+      _calculatedScore = 0; // Una derrota no suma puntaje
     }
   }
 }

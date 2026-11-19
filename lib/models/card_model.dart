@@ -2,27 +2,28 @@
 enum CardType {
   attack,  // Inflige daño a los puntos de vida del enemigo
   defense, // Proporciona escudo temporal al jugador para absorber daño
-  special, // Efectos especiales (curación, robo adicional, potenciadores)
+  heal,    // Restaura puntos de vida al jugador (hasta el máximo de 30)
+  special, // Efectos especiales (ej. robo de cartas)
 }
 
-/// Modelo de datos que representa una carta dentro del combate
+/// Modelo de datos que representa una carta dentro de Card Quest (Sección 6 del documento)
 class CardModel {
-  /// Identificador único de la carta
+  /// Identificador único de instancia de la carta
   final String id;
 
-  /// Nombre visible de la carta (ej. 'Corte Samurai')
+  /// Nombre visible de la carta (ej. 'Golpe', 'Escudo', 'Poción', 'Fuego')
   final String name;
 
-  /// Costo de puntos de energía requeridos para poder jugarla
+  /// Costo de energía por turno para poder jugarla
   final int energyCost;
 
-  /// Valor numérico principal: cantidad de daño infligido o escudo generado
+  /// Valor del efecto: cantidad de daño, escudo o curación
   final int value;
 
-  /// Categoría o tipo de la carta (ataque, defensa o especial)
+  /// Tipo de carta (ataque, defensa, curación o especial)
   final CardType type;
 
-  /// Descripción detallada del efecto para mostrar en la interfaz
+  /// Descripción detallada del efecto según las reglas del documento
   final String description;
 
   const CardModel({

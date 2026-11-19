@@ -1,0 +1,39 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Verifica si el usuario actual ha iniciado sesión mediante Firebase Auth
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Verifica si el usuario autenticado es el propietario del documento
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // ============================================================
+    // REGLAS PARA LA COLECCIÓN 'users'
+    // ============================================================
+    // - Cualquier usuario autenticado puede leer datos de perfil (útil para rankings/amigos).
+    // - Solo el propietario de la cuenta puede crear o actualizar su propio progreso.
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner(userId);
+      allow delete: if false; // Por seguridad, no se permite eliminar cuentas desde el cliente
+    }
+
+    // ============================================================
+    // REGLAS PARA LA COLECCIÓN 'scores' (Ranking Global)
+    // ============================================================
+    // - Cualquier usuario autenticado puede leer las puntuaciones para ver la tabla de líderes.
+    // - Cualquier usuario autenticado puede registrar su puntuación verificando que su UID coincida.
+    // - No se permite modificar ni borrar puntuaciones ya registradas para evitar trampas.
+    match /scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

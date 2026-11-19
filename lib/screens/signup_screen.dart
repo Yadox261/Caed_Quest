@@ -67,18 +67,22 @@ class _SignUpScreenState extends State<SignUpScreen> {
       final user = cred.user!;
       final name = _nameCtrl.text.trim();
 
-      // Guardar datos básicos en Firestore (si falla, el registro sigue siendo válido)
+      // Guardar datos iniciales de progreso en la colección 'users'
       try {
         await user.updateDisplayName(name);
         await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set({
-            'name': name,
-            'email': user.email,
-            'createdAt': FieldValue.serverTimestamp(),
-      })
-    .timeout(const Duration(seconds: 8));
+            .collection('users')
+            .doc(user.uid)
+            .set({
+              'name': name,
+              'email': user.email,
+              'unlockedLevel': 1,      // Inicia en el nivel 1
+              'totalVictories': 0,     // 0 victorias iniciales
+              'highScore': 0,          // Récord inicial en 0
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            })
+            .timeout(const Duration(seconds: 8));
       } catch (e) {
         debugPrint('⚠️ No se pudo guardar en Firestore: $e');
       }

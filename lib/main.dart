@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart' hide EmailAuthProvider;
 import 'package:firebase_ui_auth/firebase_ui_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:card_quest/screens/login_screen.dart';
+import 'package:card_quest/screens/progress_ranking_screen.dart';
 import 'firebase_options.dart';
 
 /// Instancia global de Firestore para usar en toda la app
@@ -85,6 +86,20 @@ class _AuthGateState extends State<AuthGate> {
                 appBar: AppBar(
                   title: const Text('Mi Perfil'),
                   backgroundColor: const Color(0xFF1E1B2E),
+                  actions: [
+                    IconButton(
+                      tooltip: 'Progreso y Ranking',
+                      icon: const Icon(Icons.leaderboard, color: Color(0xFFD210EB)),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ProgressRankingScreen(currentUserId: user.uid),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                 ),
                 // Panel visual que prueba la lectura y escritura en tiempo real de Firestore
                 children: [
